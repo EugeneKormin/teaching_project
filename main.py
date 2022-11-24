@@ -5,7 +5,7 @@ import math
 from PIL import Image
 
 
-from ConfigReader import PATH_TO_IMAGES, PATH_TO_RESULTS
+from ConfigReader import PATH_TO_IMAGES, PATH_TO_RESULTS, PATH_TO_HAARCASCADE
 
 
 class PassportDetector(object):
@@ -24,7 +24,8 @@ class PassportDetector(object):
         __rotated_img_list, __rotated_point_list = self.__rotate(image_list=__resized_img_list, processed_data=__processed_data)
         __moved_img_list: list = self.__move_images(image_list=__rotated_img_list, processed_data=__processed_data)
         __resized_processed_img_list: list = self.__resize_processed_img(image_list=__moved_img_list, processed_data=__rotated_point_list)
-        self.__save_results(image_list=__resized_processed_img_list)
+        __unflipped_img_list: list = self.__unflip_check(image_list=__resized_processed_img_list)
+        self.__save_results(image_list=__unflipped_img_list)
 
     @staticmethod
     def __read_images(PATH_TO_IMGS: str) -> list:
@@ -291,6 +292,33 @@ class PassportDetector(object):
             resized_processed_image_list.append(resized_image)
 
         return resized_processed_image_list
+
+    @staticmethod
+    def __unflip_check(image_list: list) -> list:
+        flipped_img_list: list = []
+        for image in image_list:
+            face_cascade = cv2.CascadeClassifier(PATH_TO_HAARCASCADE)
+
+            x, y = image.shape[:2]
+            x_rotation = y // 2
+            y_rotation = x // 2
+
+            rotation_matrix: np.ndarray = cv2.getRotationMatrix2D((x_rotation, y_rotation), 180, 1)
+            flipped_image: np.ndarray = cv2.warpAffine(image, rotation_matrix, (image.shape[1], image.shape[0]))
+
+            gray_scale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            flipped_gray_scale = cv2.cvtColor(flipped_image, cv2.COLOR_BGR2GRAY)
+
+            faces = face_cascade.detectMultiScale(gray_scale, scaleFactor=1.5, minNeighbors=5)
+            flipped_faces = face_cascade.detectMultiScale(flipped_gray_scale, scaleFactor=1.5, minNeighbors=5)
+
+            if len(faces) == 0 and len(flipped_faces) > 0:
+                flipped_img_list.append(flipped_image)
+
+            elif len(faces) > 0 and len(flipped_faces) == 0:
+                flipped_img_list.append(image)
+
+        return flipped_img_list
 
     @staticmethod
     def __save_results(image_list: list) -> None:
