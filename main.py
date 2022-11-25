@@ -13,19 +13,24 @@ class PassportDetector(object):
         ...
 
     def execute(self):
-        __raw_imgs: list = self.__read_images(PATH_TO_IMGS=PATH_TO_IMAGES)
-        __resized_img_list: list = self.__resize_images(img_list=__raw_imgs)
+        __raw_img_list: list = self.__read_images(PATH_TO_IMGS=PATH_TO_IMAGES)
+        __resized_img_list, __scale_list = self.__resize_images(img_list=__raw_img_list)
         __blurred_img_list: list = self.__blur_images(img_list=__resized_img_list)
         __gray_img_list: list = self.__gray_images(img_list=__blurred_img_list)
         __thresh_img_list: list = self.__thresh_images(img_list=__gray_img_list)
         __contours_list: list = self.__get_contours(img_list=__thresh_img_list)
         __largest_contours: list = self.__get_largest_contour(img_list=__resized_img_list, contours_list=__contours_list)
         __processed_data: list = self.__process_images(image_list=__resized_img_list, contour_list=__largest_contours)
-        __rotated_img_list, __rotated_point_list = self.__rotate(image_list=__resized_img_list, processed_data=__processed_data)
-        __moved_img_list: list = self.__move_images(image_list=__rotated_img_list, processed_data=__processed_data)
-        __resized_processed_img_list: list = self.__resize_processed_img(image_list=__moved_img_list, processed_data=__rotated_point_list)
-        __unflipped_img_list: list = self.__unflip_check(image_list=__resized_processed_img_list)
-        self.__save_results(image_list=__unflipped_img_list)
+        __rotated_img_list, __rotated_point_list = self.__rotate_images(
+            raw_image=__raw_img_list,
+            scale_list=__scale_list,
+            image_list=__resized_img_list,
+            processed_data=__processed_data
+        )
+        __moved_img_list: list = self.__move_images(image_list=__rotated_img_list, rotated_point_list=__rotated_point_list)
+        __cropped_processed_img_list: list = self.__crop_processed_img(image_list=__moved_img_list, rotated_point_list=__rotated_point_list)
+        __unflipped_img_list, __face_detected_list = self.__unflip_check(image_list=__cropped_processed_img_list)
+        self.__save_results(image_list=__unflipped_img_list, face_detected_list=__face_detected_list)
 
     @staticmethod
     def __read_images(PATH_TO_IMGS: str) -> list:
@@ -39,8 +44,9 @@ class PassportDetector(object):
         return img_list
 
     @staticmethod
-    def __resize_images(img_list: list) -> list:
+    def __resize_images(img_list: list) -> tuple:
         resized_img_list: list = []
+        scale_list: list = []
         for img in img_list:
             ORIGINAL_WIDTH: int = np.shape(img)[0]
             ORIGINAL_HEIGHT: int = np.shape(img)[1]
@@ -52,8 +58,9 @@ class PassportDetector(object):
 
             resized_image = cv2.resize(img, (SCALED_HEIGHT, SCALED_WIDTH))
             resized_img_list.append(resized_image)
+            scale_list.append(SCALE_COEFF)
 
-        return resized_img_list
+        return resized_img_list, scale_list
 
     @staticmethod
     def __blur_images(img_list: list, COEFF: int = 3) -> list:
@@ -105,14 +112,16 @@ class PassportDetector(object):
         return largest_contours
 
     @staticmethod
-    def __rotate(
+    def __rotate_images(
+            raw_image: list,
+            scale_list: list,
             image_list: list,
             processed_data: list
         ) -> tuple:
 
         rotated_image_list: list = []
         rotated_point_list: list = []
-        for image, data in zip(image_list, processed_data):
+        for image, raw_image, scale, data in zip(image_list, raw_image, scale_list, processed_data):
             rotation_point: list = data["rotation_point"]
             side_point: list = data["side_point"]
 
@@ -132,14 +141,14 @@ class PassportDetector(object):
             elif data["case"] == 6:
                 DEGREES = 0
 
-            rotation_matrix = cv2.getRotationMatrix2D((int(rotation_point[0]), int(rotation_point[1])), DEGREES, 1)
-            rotated_image = cv2.warpAffine(image, rotation_matrix, (image.shape[1]*2, image.shape[0]*2))
+            rotation_matrix = cv2.getRotationMatrix2D((int(rotation_point[0] * scale), int(rotation_point[1] * scale)), DEGREES, 1)
+            rotated_image = cv2.warpAffine(raw_image, rotation_matrix, (raw_image.shape[1]*2, raw_image.shape[0]*2))
 
-            SHIFT_X, SHIFT_Y = data["rotation_point"][0], data["rotation_point"][1]
+            SHIFT_X, SHIFT_Y = int(data["rotation_point"][0] * scale), int(data["rotation_point"][1] * scale)
 
-            moved_rotation_point = np.asarray((data["rotation_point"][0] - SHIFT_X, data["rotation_point"][1] - SHIFT_Y))
-            moved_side_point = np.asarray((data["side_point"][0] - SHIFT_X, data["side_point"][1] - SHIFT_Y))
-            moved_antirotation_point = np.asarray((data["antirotation_point"][0] - SHIFT_X, data["antirotation_point"][1] - SHIFT_Y))
+            moved_rotation_point = np.asarray((data["rotation_point"][0] * scale - SHIFT_X, data["rotation_point"][1] * scale - SHIFT_Y))
+            moved_side_point = np.asarray((data["side_point"][0] * scale - SHIFT_X, data["side_point"][1] * scale - SHIFT_Y))
+            moved_antirotation_point = np.asarray((data["antirotation_point"][0] * scale - SHIFT_X, data["antirotation_point"][1] * scale - SHIFT_Y))
 
             custom_rotation_matrix: np.ndarray = np.asarray(
                 [
@@ -157,6 +166,7 @@ class PassportDetector(object):
             moved_shifted_antirotation_point = moved_shifted_antirotation_point.astype(int)
 
             points: dict = {
+                "rotation_point": (int(data["rotation_point"][0] * scale), int(data["rotation_point"][1] * scale)),
                 "rotated_rotation_point": moved_shifted_rotation_point,
                 "rotated_side_point": moved_shifted_side_point,
                 "rotated_antirotation_point": moved_shifted_antirotation_point,
@@ -168,13 +178,12 @@ class PassportDetector(object):
         return rotated_image_list, rotated_point_list
 
     @staticmethod
-    def __move_images(image_list: list, processed_data: list) -> list:
+    def __move_images(image_list: list, rotated_point_list: list) -> list:
         moved_image_list: list = []
 
-        for image, data in zip(image_list, processed_data):
+        for image, data in zip(image_list, rotated_point_list):
 
-            rotation_point: np.ndarray = data["rotation_point"]
-            wrap_x, wrap_y = -rotation_point[0], -rotation_point[1]
+            wrap_x, wrap_y = -data["rotation_point"][0], -data["rotation_point"][1]
             transition_matrix: np.ndarray = np.float32([[1, 0, wrap_x], [0, 1, wrap_y]])
             img_trans = cv2.warpAffine(image, transition_matrix, (image.shape[1], image.shape[0]))
             moved_image_list.append(img_trans)
@@ -184,6 +193,7 @@ class PassportDetector(object):
     def __process_images(self, image_list: list, contour_list: list) -> list:
         processed_data: list = []
         for image, contour in zip(image_list, contour_list):
+
             rect = cv2.minAreaRect(contour)
             box = cv2.boxPoints(rect)
             box = np.int0(box)
@@ -281,21 +291,18 @@ class PassportDetector(object):
         return processed_data
 
     @staticmethod
-    def __resize_processed_img(image_list: list, processed_data: list) -> list:
+    def __crop_processed_img(image_list: list, rotated_point_list: list) -> list:
         resized_processed_image_list: list = []
-        for img, point in zip(image_list, processed_data):
-
+        for img, point in zip(image_list, rotated_point_list):
             crop_img = img[:point["rotated_antirotation_point"][1], :point["rotated_antirotation_point"][0]]
-
-            resized_image: np.ndarray = cv2.resize(crop_img, (480, 640))
-
-            resized_processed_image_list.append(resized_image)
+            resized_processed_image_list.append(crop_img)
 
         return resized_processed_image_list
 
     @staticmethod
-    def __unflip_check(image_list: list) -> list:
+    def __unflip_check(image_list: list) -> tuple:
         flipped_img_list: list = []
+        face_detected_list: list = []
         for image in image_list:
             face_cascade = cv2.CascadeClassifier(PATH_TO_HAARCASCADE)
 
@@ -309,23 +316,34 @@ class PassportDetector(object):
             gray_scale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             flipped_gray_scale = cv2.cvtColor(flipped_image, cv2.COLOR_BGR2GRAY)
 
-            faces = face_cascade.detectMultiScale(gray_scale, scaleFactor=1.5, minNeighbors=5)
-            flipped_faces = face_cascade.detectMultiScale(flipped_gray_scale, scaleFactor=1.5, minNeighbors=5)
+            faces = face_cascade.detectMultiScale(gray_scale, scaleFactor=1.25, minNeighbors=8)
+            flipped_faces = face_cascade.detectMultiScale(flipped_gray_scale, scaleFactor=1.25, minNeighbors=8)
 
             if len(faces) == 0 and len(flipped_faces) > 0:
                 flipped_img_list.append(flipped_image)
+                face_detected_list.append(True)
 
             elif len(faces) > 0 and len(flipped_faces) == 0:
                 flipped_img_list.append(image)
+                face_detected_list.append(True)
+            else:
+                print("Error! No face detected")
+                face_detected_list.append(False)
 
-        return flipped_img_list
+        return flipped_img_list, face_detected_list
 
     @staticmethod
-    def __save_results(image_list: list) -> None:
-        for img, NAMES in zip(image_list, os.listdir(PATH_TO_IMAGES)):
-            color_coverted = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            image: Image = Image.fromarray(color_coverted)
-            image.save(PATH_TO_RESULTS + NAMES)
+    def __save_results(image_list: list, face_detected_list: list) -> None:
+        for img, NAME, FACE_DETECTED in zip(image_list, os.listdir(PATH_TO_IMAGES), face_detected_list):
+            if FACE_DETECTED:
+                color_coverted = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                image: Image = Image.fromarray(color_coverted)
+                image.save(PATH_TO_RESULTS + NAME)
+            else:
+                print(NAME)
+                img: np.ndarray = cv2.imread(PATH_TO_RESULTS + NAME)
+                cv2.imshow("no face", img)
+                cv2.waitKey(2500)
 
 
 if __name__ == "__main__":
